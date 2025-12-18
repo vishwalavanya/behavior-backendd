@@ -41,27 +41,29 @@ export async function POST(req: Request) {
       .single();
 
     // 2️⃣ If profile does NOT exist → create first row
-    if (!existing || fetchError) {
-      const initialProfile = {
-        username,
-        device_type: deviceType,
-        avg_scroll_speed: payload.type === "scroll" ? payload.speed ?? 0 : 0,
-        avg_typing_delay: payload.type === "typing" ? payload.delay ?? 0 : 0,
-        avg_touch_x: payload.type === "touch" ? payload.x ?? 0 : 0,
-        avg_touch_y: payload.type === "touch" ? payload.y ?? 0 : 0,
-        sample_count: 1,
-        last_updated: new Date().toISOString()
-      };
+// 2️⃣ If profile does NOT exist → create first row
+if (!existing) {
+  const initialProfile = {
+    username,
+    device_type: deviceType,
+    avg_scroll_speed: payload.type === "scroll" ? payload.speed ?? 0 : 0,
+    avg_typing_delay: payload.type === "typing" ? payload.delay ?? 0 : 0,
+    avg_touch_x: payload.type === "touch" ? payload.x ?? 0 : 0,
+    avg_touch_y: payload.type === "touch" ? payload.y ?? 0 : 0,
+    sample_count: 1,
+    last_updated: new Date().toISOString()
+  };
 
-      await supabase.from("behavior_profiles").insert(initialProfile);
+  await supabase.from("behavior_profiles").insert(initialProfile);
 
-      console.log("🆕 Created behavior profile", initialProfile);
+  console.log("🆕 Created behavior profile", initialProfile);
 
-      return NextResponse.json(
-        { status: "PROFILE_CREATED" },
-        { status: 201, headers: corsHeaders }
-      );
-    }
+  return NextResponse.json(
+    { status: "PROFILE_CREATED" },
+    { status: 201, headers: corsHeaders }
+  );
+}
+
 
     // 3️⃣ Incremental learning
     const count = existing.sample_count ?? 1;
