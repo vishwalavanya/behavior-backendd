@@ -32,64 +32,122 @@ export async function POST(req: Request) {
       type: payload.type
     });
 
-    // 1️⃣ Get existing profile (if any)
-    const { data: existing } = await supabase
+    /* --------------------------------------------------
+       1️⃣ Fetch existing behavior profile
+    -------------------------------------------------- */
+    const { data: existing, error: fetchError } = await supabase
       .from("behavior_profiles")
       .select("*")
       .eq("username", username)
       .eq("device_type", deviceType)
       .maybeSingle();
 
-    const count = existing?.sample_count ?? 0;
+    /* --------------------------------------------------
+       2️⃣ If profile does NOT exist → create first row
+    -------------------------------------------------- */
+    if (!existing || fetchError) {
+      const initialProfile = {
+        username,
+        device_type: deviceType,
+        avg_scroll_speed:
+          payload.type === "scroll" ? payload.speed ?? 0 : 0,
+        avg_typing_delay:
+          payload.type === "typing" ? payload.delay ?? 0 : 0,
+        avg_touch_x:
+          payload.type === "touch" ? payload.x ?? 0 : 0,
+        avg_touch_y:
+          payload.type === "touch" ? payload.y ?? 0 : 0,
+        sample_count: 1,
+        training_started: true,
+        training_completed: false,
+        last_updated: new Date().toISOString()
+      };
 
-    // 2️⃣ Calculate next averages
+      await supabase.from("behavior_profiles").insert(initialProfile);
+
+      console.log("🆕 Behavior profile created", initialProfile);
+
+      return NextResponse.json(
+        { status: "PROFILE_CREATED" },
+        { status: 201, headers: corsHeaders }
+      );
+    }
+
+    /* --------------------------------------------------
+       3️⃣ If training already completed → stop learning
+    -------------------------------------------------- */
+    if (existing.training_completed) {
+      console.log("🛑 Training already completed — ignoring learning", {
+        username,
+        deviceType
+      });
+
+      return NextResponse.json(
+        { status: "TRAINING_COMPLETED" },
+        { status: 200, headers: corsHeaders }
+      );
+    }
+
+    /* --------------------------------------------------
+       4️⃣ Incremental learning (training phase)
+    -------------------------------------------------- */
+    const count = existing.sample_count ?? 1;
+
     const nextProfile = {
-      username,
-      device_type: deviceType,
-
       avg_scroll_speed:
         payload.type === "scroll" && payload.speed !== undefined
-          ? ((existing?.avg_scroll_speed ?? 0) * count + payload.speed) /
-            (count + 1)
-          : existing?.avg_scroll_speed ?? 0,
+          ? (existing.avg_scroll_speed * count + payload.speed) / (count + 1)
+          : existing.avg_scroll_speed,
 
       avg_typing_delay:
         payload.type === "typing" && payload.delay !== undefined
-          ? ((existing?.avg_typing_delay ?? 0) * count + payload.delay) /
-            (count + 1)
-          : existing?.avg_typing_delay ?? 0,
+          ? (existing.avg_typing_delay * count + payload.delay) / (count + 1)
+          : existing.avg_typing_delay,
 
       avg_touch_x:
         payload.type === "touch" && payload.x !== undefined
-          ? ((existing?.avg_touch_x ?? 0) * count + payload.x) /
-            (count + 1)
-          : existing?.avg_touch_x ?? 0,
+          ? (existing.avg_touch_x * count + payload.x) / (count + 1)
+          : existing.avg_touch_x,
 
       avg_touch_y:
         payload.type === "touch" && payload.y !== undefined
-          ? ((existing?.avg_touch_y ?? 0) * count + payload.y) /
-            (count + 1)
-          : existing?.avg_touch_y ?? 0,
+          ? (existing.avg_touch_y * count + payload.y) / (count + 1)
+          : existing.avg_touch_y,
 
       sample_count: count + 1,
       last_updated: new Date().toISOString()
     };
 
-    // 3️⃣ UPSERT (atomic, race-condition safe)
     await supabase
       .from("behavior_profiles")
-      .upsert(nextProfile, {
-        onConflict: "username,device_type"
-      });
+      .update(nextProfile)
+      .eq("username", username)
+      .eq("device_type", deviceType);
 
-    console.log(
-      existing
-        ? "📈 Behavior profile updated"
-        : "🆕 Behavior profile created"
-    );
+    console.log("📈 Learning behavior", {
+      username,
+      deviceType,
+      samples: nextProfile.sample_count
+    });
+
+    /* --------------------------------------------------
+       5️⃣ Training completion check (THRESHOLD = 200)
+    -------------------------------------------------- */
+    if (nextProfile.sample_count >= 200) {
+      await supabase
+        .from("behavior_profiles")
+        .update({
+          training_completed: true,
+          last_updated: new Date().toISOString()
+        })
+        .eq("username", username)
+        .eq("device_type", deviceType);
+
+      console.log("🎓 Training completed for", username, deviceType);
+    }
 
     return NextResponse.json(
-      { status: "LEARNED" },
+      { status: "LEARNING" },
       { status: 200, headers: corsHeaders }
     );
 
@@ -101,5 +159,3 @@ export async function POST(req: Request) {
     );
   }
 }
-
-
