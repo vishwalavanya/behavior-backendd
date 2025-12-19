@@ -1,16 +1,37 @@
 import { NextResponse } from "next/server";
 import { supabase } from "../../../lib/supabase";
 
+/* =======================
+   ✅ CORS HEADERS
+======================= */
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type"
+};
+
+/* =======================
+   ✅ PREFLIGHT HANDLER
+======================= */
+export async function OPTIONS() {
+  return new NextResponse(null, {
+    status: 204,
+    headers: corsHeaders
+  });
+}
+
+/* =======================
+   ✅ VERIFY BEHAVIOR
+======================= */
 export async function POST(req: Request) {
   try {
     const { username, deviceType, current } = await req.json();
 
-    if (!username || !deviceType) {
-      return NextResponse.json({
-        allowed: true,
-        trainingCompleted: false,
-        sampleCount: 0
-      });
+    if (!username || !deviceType || !current) {
+      return NextResponse.json(
+        { allowed: true },
+        { headers: corsHeaders }
+      );
     }
 
     const { data: profile } = await supabase
@@ -20,47 +41,51 @@ export async function POST(req: Request) {
       .eq("device_type", deviceType)
       .single();
 
-    // 🧠 No profile OR training not completed → allow
+    // 🟢 Allow if training not completed
     if (!profile || !profile.training_completed) {
-      return NextResponse.json({
-        allowed: true,
-        trainingCompleted: false,
-        sampleCount: profile?.sample_count ?? 0
-      });
+      return NextResponse.json(
+        { allowed: true },
+        { headers: corsHeaders }
+      );
     }
 
     let suspicious = false;
 
-    // 💻 Laptop check
-    if (deviceType === "laptop" && current?.typing_delay) {
-      const diff =
-        Math.abs(current.typing_delay - profile.avg_typing_delay) /
-        profile.avg_typing_delay;
-
-      if (diff > 0.4) suspicious = true;
+    /* ---------- 💻 LAPTOP LOGIC ---------- */
+    if (deviceType === "laptop") {
+      if (
+        current.delay &&
+        profile.avg_typing_delay > 0 &&
+        Math.abs(current.delay - profile.avg_typing_delay) /
+          profile.avg_typing_delay >
+          0.4
+      ) {
+        suspicious = true;
+      }
     }
 
-    // 📱 Phone check
-    if (deviceType === "phone" && current?.touch_x && current?.touch_y) {
-      const dx = Math.abs(current.touch_x - profile.avg_touch_x);
-      const dy = Math.abs(current.touch_y - profile.avg_touch_y);
+    /* ---------- 📱 PHONE LOGIC ---------- */
+    if (deviceType === "phone") {
+      const dx = Math.abs((current.x ?? 0) - profile.avg_touch_x);
+      const dy = Math.abs((current.y ?? 0) - profile.avg_touch_y);
 
-      if (dx > 120 || dy > 120) suspicious = true;
+      if (dx > 120 || dy > 120) {
+        suspicious = true;
+      }
     }
 
-    return NextResponse.json({
-      allowed: !suspicious,
-      trainingCompleted: true,
-      sampleCount: profile.sample_count
-    });
+    return NextResponse.json(
+      { allowed: !suspicious },
+      { headers: corsHeaders }
+    );
 
   } catch (err) {
-    console.error("Verification failed", err);
-    return NextResponse.json({
-      allowed: true,
-      trainingCompleted: false,
-      sampleCount: 0
-    });
+    console.error("❌ Verification failed", err);
+    return NextResponse.json(
+      { allowed: true },
+      { headers: corsHeaders }
+    );
   }
 }
+
 
