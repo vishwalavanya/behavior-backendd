@@ -35,98 +35,63 @@ export async function POST(req: Request) {
     });
 
     /* --------------------------------------------------
-       1️⃣ Fetch existing profile
+       1️⃣ Read existing profile (SAFE)
     -------------------------------------------------- */
     const { data: existing } = await supabase
       .from("behavior_profiles")
       .select("*")
       .eq("username", username)
       .eq("device_type", deviceType)
-      .maybeSingle();
+      .maybeSingle(); // ✅ IMPORTANT
+
+    const prevCount = existing?.sample_count ?? 0;
+    const nextCount = prevCount + 1;
 
     /* --------------------------------------------------
-       2️⃣ Create profile if NOT exists
+       2️⃣ Compute next averages
     -------------------------------------------------- */
-    if (!existing) {
-      const initialProfile = {
-        username,
-        device_type: deviceType,
-        avg_scroll_speed:
-          payload.type === "scroll" ? payload.speed ?? 0 : 0,
-        avg_typing_delay:
-          payload.type === "typing" ? payload.delay ?? 0 : 0,
-        avg_touch_x:
-          payload.type === "touch" ? payload.x ?? 0 : 0,
-        avg_touch_y:
-          payload.type === "touch" ? payload.y ?? 0 : 0,
-        sample_count: 1,
-        training_started: true,
-        training_completed: false,
-        last_updated: new Date().toISOString()
-      };
-
-      await supabase.from("behavior_profiles").insert(initialProfile);
-
-      console.log("🆕 Behavior profile created", initialProfile);
-
-      return NextResponse.json(
-        { status: "PROFILE_CREATED" },
-        { status: 201, headers: corsHeaders }
-      );
-    }
-
-    /* --------------------------------------------------
-       3️⃣ Stop learning if training completed
-    -------------------------------------------------- */
-    if (existing.training_completed) {
-      console.log("🔒 Training frozen — no more learning", {
-        username,
-        deviceType
-      });
-
-      return NextResponse.json(
-        { status: "TRAINING_COMPLETED" },
-        { status: 200, headers: corsHeaders }
-      );
-    }
-
-    /* --------------------------------------------------
-       4️⃣ Incremental learning
-    -------------------------------------------------- */
-    const count = existing.sample_count ?? 1;
-    const nextCount = count + 1;
-
     const nextProfile = {
+      username,
+      device_type: deviceType,
+
       avg_scroll_speed:
         payload.type === "scroll" && payload.speed !== undefined
-          ? (existing.avg_scroll_speed * count + payload.speed) / nextCount
-          : existing.avg_scroll_speed,
+          ? (existing?.avg_scroll_speed ?? 0) * prevCount / nextCount +
+            payload.speed / nextCount
+          : existing?.avg_scroll_speed ?? 0,
 
       avg_typing_delay:
         payload.type === "typing" && payload.delay !== undefined
-          ? (existing.avg_typing_delay * count + payload.delay) / nextCount
-          : existing.avg_typing_delay,
+          ? (existing?.avg_typing_delay ?? 0) * prevCount / nextCount +
+            payload.delay / nextCount
+          : existing?.avg_typing_delay ?? 0,
 
       avg_touch_x:
         payload.type === "touch" && payload.x !== undefined
-          ? (existing.avg_touch_x * count + payload.x) / nextCount
-          : existing.avg_touch_x,
+          ? (existing?.avg_touch_x ?? 0) * prevCount / nextCount +
+            payload.x / nextCount
+          : existing?.avg_touch_x ?? 0,
 
       avg_touch_y:
         payload.type === "touch" && payload.y !== undefined
-          ? (existing.avg_touch_y * count + payload.y) / nextCount
-          : existing.avg_touch_y,
+          ? (existing?.avg_touch_y ?? 0) * prevCount / nextCount +
+            payload.y / nextCount
+          : existing?.avg_touch_y ?? 0,
 
       sample_count: nextCount,
+      training_started: true,
       training_completed: nextCount >= TRAINING_LIMIT,
       last_updated: new Date().toISOString()
     };
 
+    /* --------------------------------------------------
+       3️⃣ ATOMIC UPSERT (NO RACE CONDITIONS)
+    -------------------------------------------------- */
     await supabase
       .from("behavior_profiles")
-      .update(nextProfile)
-      .eq("username", username)
-      .eq("device_type", deviceType);
+      .upsert(nextProfile, {
+        onConflict: "username,device_type"
+      });
 
     console.log(
       nextProfile.training_completed
@@ -136,7 +101,7 @@ export async function POST(req: Request) {
     );
 
     return NextResponse.json(
-      { status: "LEARNING" },
+      { status: "LEARNING", sampleCount: nextCount },
       { status: 200, headers: corsHeaders }
     );
 
@@ -148,4 +113,3 @@ export async function POST(req: Request) {
     );
   }
 }
-
