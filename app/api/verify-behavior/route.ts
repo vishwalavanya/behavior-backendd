@@ -2,14 +2,11 @@ import { NextResponse } from "next/server";
 import { supabase } from "../../../lib/supabase";
 
 /* =======================
-   🔐 THRESHOLDS (RULES)
+   🔐 THRESHOLDS
 ======================= */
-
-// 💻 Laptop thresholds
 const LAPTOP_MIN = 300;
 const LAPTOP_MAX = 1000;
 
-// 📱 Phone thresholds
 const PHONE_MIN = 300;
 const PHONE_MAX = 1200;
 
@@ -39,7 +36,7 @@ export async function POST(req: Request) {
   try {
     const { username, deviceType, current } = await req.json();
 
-    // Safety fallback
+    // 🟢 Fail-safe (never block accidentally)
     if (!username || !deviceType || !current) {
       return NextResponse.json(
         { allowed: true },
@@ -57,7 +54,6 @@ export async function POST(req: Request) {
       .eq("device_type", deviceType)
       .maybeSingle();
 
-    // If profile not ready → allow
     if (!profile) {
       return NextResponse.json(
         { allowed: true },
@@ -68,15 +64,12 @@ export async function POST(req: Request) {
     const sampleCount = profile.sample_count ?? 0;
 
     /* =======================
-       🧠 MIN / MAX DECISION
+       🧠 MIN / MAX LOGIC
     ======================= */
-    const MIN =
-      deviceType === "phone" ? PHONE_MIN : LAPTOP_MIN;
+    const MIN = deviceType === "phone" ? PHONE_MIN : LAPTOP_MIN;
+    const MAX = deviceType === "phone" ? PHONE_MAX : LAPTOP_MAX;
 
-    const MAX =
-      deviceType === "phone" ? PHONE_MAX : LAPTOP_MAX;
-
-    // 🟡 Below minimum → no protection yet
+    // 🟡 Training phase (no blocking)
     if (sampleCount < MIN) {
       return NextResponse.json(
         {
@@ -89,11 +82,11 @@ export async function POST(req: Request) {
     }
 
     /* =======================
-       🚨 VERIFICATION ACTIVE
+       🚨 SECURITY ACTIVE
     ======================= */
     let suspicious = false;
 
-    // 💻 Laptop logic (typing rhythm)
+    // 💻 Laptop — typing rhythm
     if (deviceType === "laptop") {
       if (
         current.delay &&
@@ -106,7 +99,7 @@ export async function POST(req: Request) {
       }
     }
 
-    // 📱 Phone logic (touch pattern)
+    // 📱 Phone — touch pattern (TEMP BASIC)
     if (deviceType === "phone") {
       const dx = Math.abs((current.x ?? 0) - profile.avg_touch_x);
       const dy = Math.abs((current.y ?? 0) - profile.avg_touch_y);
@@ -132,13 +125,14 @@ export async function POST(req: Request) {
   } catch (err) {
     console.error("❌ Verification failed", err);
 
-    // Fail-safe: never block on error
+    // 🟢 Fail-safe
     return NextResponse.json(
       { allowed: true },
       { headers: corsHeaders }
     );
   }
 }
+
 
 
 
