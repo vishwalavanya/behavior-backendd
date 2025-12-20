@@ -2,7 +2,19 @@ import { NextResponse } from "next/server";
 import { supabase } from "../../../lib/supabase";
 
 /* =======================
-   ✅ CORS HEADERS
+   🔐 THRESHOLDS (RULES)
+======================= */
+
+// 💻 Laptop thresholds
+const LAPTOP_MIN = 300;
+const LAPTOP_MAX = 1000;
+
+// 📱 Phone thresholds
+const PHONE_MIN = 300;
+const PHONE_MAX = 1200;
+
+/* =======================
+   🌐 CORS HEADERS
 ======================= */
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -11,7 +23,7 @@ const corsHeaders = {
 };
 
 /* =======================
-   ✅ PREFLIGHT HANDLER
+   🌐 PREFLIGHT
 ======================= */
 export async function OPTIONS() {
   return new NextResponse(null, {
@@ -21,12 +33,13 @@ export async function OPTIONS() {
 }
 
 /* =======================
-   ✅ VERIFY BEHAVIOR
+   🔍 VERIFY BEHAVIOR
 ======================= */
 export async function POST(req: Request) {
   try {
     const { username, deviceType, current } = await req.json();
 
+    // Safety fallback
     if (!username || !deviceType || !current) {
       return NextResponse.json(
         { allowed: true },
@@ -34,24 +47,53 @@ export async function POST(req: Request) {
       );
     }
 
+    /* =======================
+       📦 FETCH PROFILE
+    ======================= */
     const { data: profile } = await supabase
       .from("behavior_profiles")
       .select("*")
       .eq("username", username)
       .eq("device_type", deviceType)
-      .single();
+      .maybeSingle();
 
-    // 🟢 Allow if training not completed
-    if (!profile || !profile.training_completed) {
+    // If profile not ready → allow
+    if (!profile) {
       return NextResponse.json(
         { allowed: true },
         { headers: corsHeaders }
       );
     }
 
+    const sampleCount = profile.sample_count ?? 0;
+
+    /* =======================
+       🧠 MIN / MAX DECISION
+    ======================= */
+    const MIN =
+      deviceType === "phone" ? PHONE_MIN : LAPTOP_MIN;
+
+    const MAX =
+      deviceType === "phone" ? PHONE_MAX : LAPTOP_MAX;
+
+    // 🟡 Below minimum → no protection yet
+    if (sampleCount < MIN) {
+      return NextResponse.json(
+        {
+          allowed: true,
+          trainingActive: false,
+          sampleCount
+        },
+        { headers: corsHeaders }
+      );
+    }
+
+    /* =======================
+       🚨 VERIFICATION ACTIVE
+    ======================= */
     let suspicious = false;
 
-    /* ---------- 💻 LAPTOP LOGIC ---------- */
+    // 💻 Laptop logic (typing rhythm)
     if (deviceType === "laptop") {
       if (
         current.delay &&
@@ -64,7 +106,7 @@ export async function POST(req: Request) {
       }
     }
 
-    /* ---------- 📱 PHONE LOGIC ---------- */
+    // 📱 Phone logic (touch pattern)
     if (deviceType === "phone") {
       const dx = Math.abs((current.x ?? 0) - profile.avg_touch_x);
       const dy = Math.abs((current.y ?? 0) - profile.avg_touch_y);
@@ -74,18 +116,29 @@ export async function POST(req: Request) {
       }
     }
 
+    /* =======================
+       ✅ FINAL DECISION
+    ======================= */
     return NextResponse.json(
-      { allowed: !suspicious },
+      {
+        allowed: !suspicious,
+        trainingActive: true,
+        sampleCount,
+        maxReached: sampleCount >= MAX
+      },
       { headers: corsHeaders }
     );
 
   } catch (err) {
     console.error("❌ Verification failed", err);
+
+    // Fail-safe: never block on error
     return NextResponse.json(
       { allowed: true },
       { headers: corsHeaders }
     );
   }
 }
+
 
 
